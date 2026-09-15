@@ -15,9 +15,51 @@ across turns, serves many sessions concurrently, and ships with a ChatGPT-style
 web UI.
 
 There are **no tools, no function calls, no agents and no RAG** anywhere in the
-request path. Everything the assistant appears to know comes from a static
-policy block in the system prompt plus what the customer said earlier in the
-same session.
+request path. Everything the assistant knows comes from two constants pasted
+into the system prompt on every turn -- the Nimbus policy and a six-order demo
+book -- plus what the customer said earlier in the same session. Nothing is
+selected per query, there is no index, and no code fetches a record.
+
+---
+
+## Screenshots
+
+Every conversation below is real output from the local model, captured by
+[`scripts/make_screenshots.py`](scripts/make_screenshots.py): it drives the live
+WebSocket API, then loads the resulting session by id in headless Chrome. None
+of it is mocked up.
+
+| | |
+|---|---|
+| ![Welcome, light](docs/screenshots/01-welcome-light.png) | ![Welcome, dark](docs/screenshots/02-welcome-dark.png) |
+| **Light theme** — dotted background, suggestion cards | **Dark theme** — toggled in the header, persisted |
+
+### A real order lookup
+
+`NIM-40011234` with its matching email, so the assistant answers from the record:
+
+![Order lookup](docs/screenshots/03-order-lookup.png)
+
+### Refusing what it cannot know
+
+An order reference that is not in the book. The assistant declines instead of
+inventing a status:
+
+![Unknown order](docs/screenshots/06-unknown-order.png)
+
+### Staying in character
+
+Off-topic and persona-override attempts. The deterministic guard *detects*
+these, but the refusal is written by the model (`guard: steer:...`), so it stays
+in voice — and the amber tint plus the chips make the mechanism visible:
+
+![Off-topic and jailbreak](docs/screenshots/05-off-topic-guard.png)
+
+### Policy arithmetic
+
+An order delivered 41 days ago, so outside the 30-day window:
+
+![Return past the window](docs/screenshots/04-return-past-window.png)
 
 ---
 
@@ -418,25 +460,44 @@ the prompt where attention is strongest.
 model echoes (`CURRENT STAGE:`, `Agent:`, a leaked heading and its bullets)
 before it reaches the transcript or the history.
 
-**Layer 4 — output verification.** The one behaviour that must never reach a
-customer is a *fabricated order status*. Three rounds of prompt engineering made
-it rare but never eliminated it, which is the honest situation with a 3B model:
-a system prompt is a strong preference, not a guarantee. So
+**Layer 4 — output verification.** The one thing that must never reach a
+customer is a *fabricated* order status.
 [`app/domain/verification.py`](app/domain/verification.py) checks every reply in
-an order-touching lane against a narrow set of patterns — attributing an order
-state to the customer's order, naming a delivery/dispatch date, or claiming to
-have "checked" or "looked up" anything. A match replaces the reply with a safe,
-policy-grounded one, **in the transcript and in the stored history**, so the
-fabrication cannot be replayed next turn and become context the model builds on.
-The client receives a `correction` frame and swaps the message; the UI tints it
-and labels it.
+an order-touching lane, and since the order book exists the verdict depends on
+identity:
 
-This is the only place where the system overrides the model rather than steering
-it, and it is deliberately narrow: a detector that fired on legitimate policy
-talk ("once an order is dispatched it cannot be cancelled") would replace correct
-answers with a fallback, which is worse than no detector. Both directions are
-regression-tested in
-[`tests/test_fabrication_detector.py`](tests/test_fabrication_detector.py).
+| Situation | Verdict |
+|---|---|
+| Reference in the book **and** email matches | May state that record. Only a *contradicting* status, or a wrong return verdict, is caught |
+| Reference unknown, email mismatched, or no reference | Any status claim or lookup claim is invented — **blocked** |
+| Denial ("I cannot find that order") | Never fabrication, in any case |
+| Conditional or definitional ("once an order is dispatched…") | Correct policy talk, always allowed |
+| A named day or date | No record carries one — **blocked** either way |
+
+A blocked reply is replaced in the transcript *and in the stored history*, so it
+cannot be replayed next turn and become context the model builds on. The client
+gets a `correction` frame and swaps the message.
+
+**Testing this against the real model found five genuine defects**, each worth
+knowing about because they are the kind that hide behind a green test suite:
+
+1. Patterns anchored on *"your order"* missed *"**this** order is currently in the
+   DELIVERED side state"* — a flat contradiction of the record.
+2. `state` and `status` were in the allow-list to spare definitions, and became a
+   bypass: the word "state" alone excused a contradicting sentence.
+3. Greedy regex captured the *furthest* state, so *"in transit and should be
+   delivered in a few days"* was flagged as contradicting itself.
+4. Return eligibility is arithmetic the state checks are blind to: the model
+   wrote *"you are within the 30-day return window since it was delivered 41 days
+   ago"*. Records now carry an explicit `returnable` field so the contradiction
+   is checkable without parsing English.
+5. Blocking *"I can confirm there **isn't** an order"* replaced a correct denial
+   with a fallback.
+
+Both directions are pinned in
+[`tests/test_fabrication_detector.py`](tests/test_fabrication_detector.py): a
+detector that fires on correct answers is worse than none, because it silently
+degrades working behaviour.
 
 ### 3.7 Demo order book — what you can actually test
 
@@ -703,7 +764,12 @@ Plain HTML/CSS/JS, no framework and no build step —
 
 - **Live streaming** — tokens appended as text nodes (not `innerHTML`
   re-renders), with a blinking cursor while generating.
-- **Full history**, with the conversation stage shown as a chip under each reply.
+- **Full history**, with the conversation stage shown as a chip under each reply,
+  and restored on refresh: the session already survived on the server, so the
+  transcript now repaints instead of coming back to an empty thread.
+- **Deep links** - `?session_id=...` opens a specific conversation and
+  `?theme=light|dark` forces a theme, which is how the screenshots above are
+  captured reproducibly.
 - **New chat** resets the session over the socket.
 - **Telemetry toggle** — per-reply TTFT, tok/s, prompt/output tokens, and the
   live context-window state (`ctx 4/17 turns`, `evicted 13`, `summary on`,
@@ -1033,7 +1099,7 @@ get a slow-but-complete answer rather than eight users all timing out.
 ```
 
 ```
-166 passed in 3.54s
+195 passed in 2.42s
 ```
 
 
@@ -1046,7 +1112,7 @@ What it covers:
 | `tests/test_memory.py` | Token estimation, window planning, the verbatim floor, oversized turns, session store TTL/LRU/reset |
 | `tests/test_manager.py` | Validation, guard short-circuit, stage machine, fact pinning across eviction, prompt-prefix stability, rolling summary + watermark, topic switch/resume, model failures, output scrubbing |
 | `tests/test_api.py` | REST surface, WebSocket protocol, every error code, disconnect mid-stream, busy rejection, session isolation, non-blocking behaviour |
-| `tests/test_fabrication_detector.py` | The output verifier in both directions: catches 10 real fabrication phrasings, fires on none of 9 correct policy answers |
+| `tests/test_fabrication_detector.py` | The output verifier across the whole verified/unverified matrix, in both directions |
 
 Correctness against the **real** model is a separate script, because a mock
 cannot tell you whether the assistant stays in character:
@@ -1263,11 +1329,17 @@ assignment-1/
 ├── scripts/
 │   ├── benchmark.py              # latency, context scaling, concurrency, calibration
 │   ├── evaluate.py               # correctness against the real model
+│   ├── make_screenshots.py       # captures the README images
+│   ├── failure_drill.py          # breaks the live server on purpose
 │   └── make_transcripts.py       # captures the README's example dialogues
 ├── tests/                        # pytest suite (mock engine)
 ├── docs/
 │   ├── example-dialogues.md      # real captured transcripts
-│   └── benchmarks.md             # raw benchmark output
+│   ├── benchmarks-3b.md          # raw benchmark output, selected model
+│   ├── benchmarks-1.5b.md        # raw benchmark output, the alternative
+│   ├── benchmark-conversation.md # per-turn latency, real conversation
+│   ├── failure-drill.txt         # failure-handling drill output
+│   └── screenshots/              # README images, captured from the live app
 ├── requirements.txt              # pinned
 ├── .env.example
 └── README.md

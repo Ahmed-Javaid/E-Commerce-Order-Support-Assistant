@@ -63,6 +63,14 @@
   }
 
   function initTheme() {
+    // ?theme=light|dark wins over everything, so a screenshot or a shared link
+    // renders the same way regardless of the viewer's OS setting.
+    const forced = new URLSearchParams(location.search).get("theme");
+    if (forced === "light" || forced === "dark") {
+      applyTheme(forced);
+      return;
+    }
+
     let stored = null;
     try {
       stored = localStorage.getItem(THEME_KEY);
@@ -199,6 +207,31 @@
     meta.hidden = meta.childElementCount === 0;
   }
 
+  async function restoreHistory(sessionId) {
+    let data;
+    try {
+      const response = await fetch(`/api/session/${encodeURIComponent(sessionId)}`);
+      if (!response.ok) return;
+      data = await response.json();
+    } catch {
+      return; // Offline or the session expired: leave the welcome screen up.
+    }
+    if (!data.turns || !data.turns.length) return;
+
+    for (const turn of data.turns) {
+      addMessage("user", turn.user);
+      const assistant = addMessage("assistant", turn.assistant, {
+        guard: Boolean(turn.guarded),
+      });
+      renderMeta(assistant.meta, {
+        stage: turn.stage,
+        guarded: turn.guarded,
+        stats: { total_ms: turn.latency_ms },
+      });
+    }
+    scrollToBottom(true);
+  }
+
   /* -------------------------------------------------------------- sending */
 
   function setStreaming(on) {
@@ -317,6 +350,12 @@
         try { sessionStorage.setItem(SESSION_KEY, frame.session_id); } catch {}
         el.modelBadge.textContent = `${frame.engine}:${frame.model}`;
         setStatus("online", "Connected");
+        // The session survives a refresh on the server, so the transcript should
+        // survive it on screen too. Without this the page came back connected to
+        // a session with nine turns behind it and showed an empty thread.
+        if (frame.turn_count > 0 && el.thread.querySelectorAll(".msg").length === 0) {
+          restoreHistory(frame.session_id);
+        }
         break;
       }
 
@@ -470,10 +509,18 @@
 
   initTheme();
 
-  try {
-    state.sessionId = sessionStorage.getItem(SESSION_KEY);
-  } catch {
-    state.sessionId = null;
+  // ?session_id=... deep-links a specific conversation, which is what lets a
+  // transcript be shared or captured. It takes precedence over the tab's own
+  // remembered session.
+  const urlSession = new URLSearchParams(location.search).get("session_id");
+  if (urlSession) {
+    state.sessionId = urlSession;
+  } else {
+    try {
+      state.sessionId = sessionStorage.getItem(SESSION_KEY);
+    } catch {
+      state.sessionId = null;
+    }
   }
 
   connect();
