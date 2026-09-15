@@ -3,8 +3,10 @@
 Measures what the README reports, against the real local model:
 
   --latency     time-to-first-token and decode throughput, cold and warm
-  --context     how TTFT scales as the prompt grows (the reason the context
-                policy exists at all)
+  --context      how TTFT scales as the prompt grows (the reason the context
+                 policy exists at all)
+  --conversation per-turn latency through a real 8-turn conversation -- the
+                 number a user actually feels, unlike --latency
   --concurrent  N simultaneous sessions through the running FastAPI server
   --calibrate   the character-per-token estimator against Ollama's own
                 prompt_eval_count
@@ -250,6 +252,97 @@ async def bench_context(engine: OllamaEngine) -> None:
 
 
 # --------------------------------------------------------------------------
+# 2b. realistic multi-turn conversation
+# --------------------------------------------------------------------------
+
+
+CONVERSATION: list[str] = [
+    "hi",
+    "my order still has not turned up and it has been 9 days",
+    "it is NIM-40011234 and I ordered with sara.k@example.com",
+    "the tracking page just says label created",
+    "ok, and what happens if it never gets scanned?",
+    "actually, separate question: how much is express shipping?",
+    "right, back to the parcel then. what should I do next?",
+    "thanks, that is all",
+]
+
+
+async def bench_conversation(engine: OllamaEngine) -> None:
+    """Per-turn latency through the *real* conversation manager.
+
+    This is the number a user actually experiences, and it is much worse than
+    the single-turn figure above. The single-turn benchmark re-sends an
+    identical prompt, so the runtime's KV cache covers nearly all of it. A real
+    conversation never does that: the stage directive, lane directive, pinned
+    facts and per-turn notes all change from turn to turn, so the cached prefix
+    diverges partway through the system prompt and everything after it has to be
+    re-evaluated -- on top of the history that has grown since the last turn.
+
+    Reporting only the single-turn number would flatter the system by an order
+    of magnitude, so both are published.
+    """
+    from app.conversation.manager import ConversationManager
+    from app.conversation.session import Session
+
+    print("\n## Realistic multi-turn conversation\n")
+    manager = ConversationManager(engine)
+    session = Session(session_id="bench_conversation")
+
+    rows: list[list[str]] = []
+    ttfts: list[float] = []
+    totals: list[float] = []
+
+    for index, message in enumerate(CONVERSATION, start=1):
+        started = time.perf_counter()
+        ttft = 0.0
+        stage = ""
+        guarded = ""
+        tokens = 0
+        prompt_tokens = 0
+        async for event in manager.stream_turn(session, message):
+            if event.type == "start":
+                stage, guarded = event.stage, event.guarded
+            elif event.type == "token":
+                if tokens == 0:
+                    ttft = (time.perf_counter() - started) * 1000.0
+                tokens += 1
+            elif event.type == "done" and event.stats:
+                prompt_tokens = event.stats.prompt_tokens
+        total = (time.perf_counter() - started) * 1000.0
+
+        rows.append(
+            [
+                str(index),
+                message[:34],
+                stage.replace("_", " ") + (" (guard)" if guarded else ""),
+                str(prompt_tokens),
+                f"{ttft:.0f}",
+                f"{total / 1000:.1f}",
+            ]
+        )
+        if not guarded:
+            ttfts.append(ttft)
+            totals.append(total)
+        print(f"  turn {index}/{len(CONVERSATION)}: ttft {ttft:.0f} ms", file=sys.stderr)
+
+    print(
+        table(
+            ["#", "customer says", "stage", "prompt tok", "TTFT (ms)", "total (s)"],
+            rows,
+        )
+    )
+    if ttfts:
+        print(
+            f"\nModel-answered turns only (guard turns are instant and excluded): "
+            f"TTFT mean **{statistics.fmean(ttfts):.0f} ms**, "
+            f"median {statistics.median(ttfts):.0f} ms, "
+            f"p95 {p(ttfts, 0.95):.0f} ms. "
+            f"Total response mean {statistics.fmean(totals) / 1000:.1f} s."
+        )
+
+
+# --------------------------------------------------------------------------
 # 3. concurrency (through the running server)
 # --------------------------------------------------------------------------
 
@@ -352,13 +445,16 @@ async def main() -> None:
     parser.add_argument("--all", action="store_true", help="run every benchmark")
     parser.add_argument("--latency", action="store_true")
     parser.add_argument("--context", action="store_true")
+    parser.add_argument("--conversation", action="store_true")
     parser.add_argument("--calibrate", action="store_true")
     parser.add_argument("--concurrent", type=int, default=0, metavar="N")
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--url", default="http://127.0.0.1:8000")
     args = parser.parse_args()
 
-    run_all = args.all or not (args.latency or args.context or args.calibrate or args.concurrent)
+    run_all = args.all or not (
+        args.latency or args.context or args.conversation or args.calibrate or args.concurrent
+    )
 
     print("# Benchmark results\n")
     print(f"- engine: `{settings.engine}`  model: `{settings.model}`")
@@ -382,6 +478,8 @@ async def main() -> None:
             await bench_latency(engine, args.rounds)
         if run_all or args.context:
             await bench_context(engine)
+        if run_all or args.conversation:
+            await bench_conversation(engine)
         if run_all or args.calibrate:
             await bench_calibrate(engine)
         if args.concurrent or run_all:

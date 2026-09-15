@@ -637,34 +637,78 @@ Reproduce everything below with:
 .venv/Scripts/python.exe scripts/benchmark.py --all --rounds 3 --concurrent 4
 ```
 
-Raw output: [`docs/benchmarks-3b.md`](docs/benchmarks-3b.md) and
-[`docs/benchmarks-1.5b.md`](docs/benchmarks-1.5b.md).
+Raw output: [`docs/benchmarks-3b.md`](docs/benchmarks-3b.md),
+[`docs/benchmarks-1.5b.md`](docs/benchmarks-1.5b.md) and
+[`docs/benchmark-conversation.md`](docs/benchmark-conversation.md).
 
 ### 8.1 Latency benchmarks
 
-**Single-turn latency, `qwen2.5:3b-instruct-q4_K_M`** — 18 warm generations,
-3 rounds over 6 representative support prompts:
+> **Read the multi-turn table first.** Two latency numbers appear below and they
+> differ by 30x. The single-turn figure re-sends an identical prompt, so the
+> runtime's KV cache covers nearly all of it — that is a best case a real
+> conversation never reaches. The multi-turn figure runs an actual 8-turn
+> conversation through the conversation manager and is what a user feels.
+> Publishing only the first would flatter this system by an order of magnitude.
+
+#### Realistic multi-turn conversation (the number that counts)
+
+`python scripts/benchmark.py --conversation` — one 8-turn support conversation:
+
+| # | Customer says | Stage | Prompt tok | TTFT | Total |
+|---|---|---|---:|---:|---:|
+| 1 | hi | greeting | 1,786 | 5.0 s | 9.3 s |
+| 2 | my order still has not turned up… | order identification | 2,052 | 9.4 s | 22.7 s |
+| 3 | it is NIM-40011234 and… | policy resolution | 2,214 | 12.7 s | 29.3 s |
+| 4 | the tracking page says label created | confirmation | 2,355 | 14.3 s | 31.4 s |
+| 5 | what if it never gets scanned? | policy resolution | 2,551 | 17.9 s | 36.1 s |
+| 6 | separate question: express shipping? | policy resolution | 2,608 | 19.1 s | 25.9 s |
+| 7 | back to the parcel, what next? | policy resolution | 2,664 | 19.8 s | 32.0 s |
+| 8 | thanks, that is all | closing | 2,776 | 22.4 s | 25.1 s |
+
+**TTFT mean 15.1 s, median 16.1 s, p95 21.5 s. Total response mean 26.5 s.**
+
+That is slow, and the cause is specific rather than mysterious: **the cached
+prefix only covers the part of the prompt that does not change.** The persona
+and policy block (~1,650 tokens) is shared and cached, but the stage directive,
+lane directive, pinned facts and per-turn notes all change every turn, and
+everything after the first divergence has to be re-evaluated at ~64 tok/s.
+Prompt tokens climb from 1,786 to 2,776 across the conversation, and TTFT climbs
+with them almost linearly.
+
+Two honest consequences:
+
+- The context budget is doing real work. Without it the prompt would pass 4,096
+  tokens by turn twelve and TTFT would keep climbing past 30 s.
+- The block ordering could be pushed further. Moving the *stage and lane
+  directives above the pinned facts and notes* would extend the stable prefix by
+  a few hundred tokens. That was identified from this measurement and is the
+  first thing to try next, not something already claimed as done.
+
+#### Single-turn latency (repeated identical prompt — best case)
+
+18 warm generations, 3 rounds over 6 prompts, same system prompt each time:
 
 | Metric | Mean | Median | p95 | Min | Max |
 |---|---:|---:|---:|---:|---:|
-| **Time to first token** | **518 ms** | 493 ms | 738 ms | 347 ms | 776 ms |
-| **Total response time** | **6.96 s** | 6.20 s | 12.01 s | 2.13 s | 16.25 s |
-| **Decode throughput** | **12.1 tok/s** | 12.0 | 13.6 | 9.2 | 13.7 |
+| Time to first token | 518 ms | 493 ms | 738 ms | 347 ms | 776 ms |
+| Total response time | 6.96 s | 6.20 s | 12.01 s | 2.13 s | 16.25 s |
+| Decode throughput | 12.1 tok/s | 12.0 | 13.6 | 9.2 | 13.7 |
 | Completion length | 75 tok | 68 | 129 | 24 | 154 |
 
-**Uncached first token: 27.49 s.** That is the honest cost of evaluating the
-full 1,747-token prompt with nothing in the KV cache — 27.44 s of prompt
-evaluation at **64 tok/s prompt throughput** on this CPU. Users never see it,
-because startup warmup pre-evaluates the shared prefix (§4.2) and every
-subsequent turn reuses it. **That one design decision is the difference between
-a 27 s and a 0.5 s first token.**
+This isolates **decode** speed (12.1 tok/s) cleanly, which is its real value —
+decode is prompt-independent, so this number does transfer. The 518 ms TTFT does
+not.
+
+**Uncached first token: 27.49 s** — the full 1,747-token prompt evaluated with
+nothing cached, at **64 tok/s prompt throughput**. The startup warmup pays this
+once so the first customer does not.
 
 **Model comparison, measured on identical prompts and hardware:**
 
 | | Qwen2.5 1.5B Q4_K_M | **Qwen2.5 3B Q4_K_M** (selected) |
 |---|---:|---:|
-| TTFT, warm (mean / median) | 990 ms / **277 ms** | 518 ms / 493 ms |
-| TTFT, warm (p95) | 2,288 ms | **738 ms** |
+| TTFT, single-turn best case (mean) | 990 ms | **518 ms** |
+| TTFT, single-turn best case (p95) | 2,288 ms | **738 ms** |
 | Total response (mean) | **4.45 s** | 6.96 s |
 | Decode throughput | **21.4 tok/s** | 12.1 tok/s |
 | Uncached first token | **17.07 s** | 27.49 s |
@@ -911,6 +955,14 @@ requests phrased in Nimbus vocabulary.
 and the server cannot be scaled to multiple workers without a shared store.
 Bounded at 500 sessions with 1-hour TTL and LRU eviction, so it degrades
 predictably rather than exhausting memory.
+
+**Latency in real conversations is high.** 15 s to first token and ~27 s to a
+complete answer (§8.1) is usable for a demo and too slow for production. It is
+not an architectural problem — it is ~64 tok/s of prompt evaluation on six CPU
+cores against a ~2,500-token prompt. The fixes, in order of expected value:
+extend the stable prompt prefix by reordering the volatile blocks, shrink the
+policy block, or run on a GPU (the same model reached 188 tok/s on the RTX 3080
+before CPU was enforced).
 
 **Concurrency is bounded by one CPU and one model.** The API multiplexes cleanly
 and never blocks, but Ollama decodes essentially serially on CPU. Four
