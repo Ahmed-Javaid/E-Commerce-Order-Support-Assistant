@@ -1,0 +1,29 @@
+Target: http://127.0.0.1:8000 | model: qwen2.5:3b-instruct-q4_K_M | status: ok
+
+Malformed input (socket must survive every one)
+  PASS unparseable JSON -- code=malformed_json, socket alive=True
+  PASS JSON array instead of object -- code=malformed_frame, socket alive=True
+  PASS unknown frame type -- code=invalid_frame, socket alive=True
+  PASS chat frame with no message -- code=missing_message, socket alive=True
+  PASS whitespace-only message -- code=empty_message, socket alive=True
+  PASS oversized message (5000 chars) -- code=invalid_frame, socket alive=True
+  PASS non-string message -- code=invalid_frame, socket alive=True
+
+REST misuse
+  PASS unknown session id is 404 -- status=404
+  PASS path traversal is rejected -- status=404
+  PASS reset of an empty session succeeds -- status=200
+
+Disconnect mid-stream
+  PASS closed socket after 3 tokens -- 3 tokens received
+  PASS server healthy after abrupt disconnect -- status=ok
+
+Two sends on one session
+  PASS second concurrent send is rejected, not queued -- code=busy
+
+4 simultaneous sessions
+  PASS all 4 sessions completed -- 4/4 in 38.3s
+  PASS in-flight counter returns to zero -- in_flight=0, sessions=17
+
+======================================================================
+15/15 drills passed

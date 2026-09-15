@@ -1,0 +1,13 @@
+# Pinned so the grader gets exactly the stack this was built and benchmarked on.
+# fastapi 0.115.x requires starlette <0.42; leaving these unpinned picks up a
+# starlette 1.x that breaks FastAPI at import time.
+fastapi==0.115.6
+starlette==0.41.3
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+httpx==0.28.1
+websockets==14.1
+
+# Test-suite only.
+pytest==8.3.4
+pytest-asyncio==0.25.0

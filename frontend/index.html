@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nimbus Support &mdash; Ava</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9729;</text></svg>" />
+</head>
+<body>
+  <div class="app">
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+          </svg>
+        </span>
+        <div class="brand-text">
+          <strong>Nimbus Support</strong>
+          <span class="brand-sub">Ava &middot; Order Support Specialist</span>
+        </div>
+      </div>
+
+      <div class="topbar-right">
+        <div class="status" id="status" data-state="connecting">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="status-text" id="status-text">Connecting</span>
+        </div>
+        <button type="button" class="ghost-btn" id="details-btn" aria-pressed="false"
+                title="Show per-turn latency and context-window telemetry">
+          Telemetry
+        </button>
+        <button type="button" class="ghost-btn danger" id="reset-btn"
+                title="Clear this conversation and start a new session">
+          New chat
+        </button>
+      </div>
+    </header>
+
+    <main class="thread" id="thread" role="log" aria-live="polite" aria-label="Conversation">
+
+      <section class="welcome" id="welcome">
+        <div class="welcome-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+        </div>
+        <h1>How can I help with your Nimbus order?</h1>
+        <p class="welcome-sub">
+          I handle order tracking, returns and refunds, warranty claims, and Nimbus
+          shipping&nbsp;&amp;&nbsp;payment policy. I do not have live access to the order
+          system, so I will never invent a delivery date &mdash; I work from what you tell me
+          and from Nimbus policy.
+        </p>
+        <div class="suggestions" id="suggestions">
+          <button type="button" class="suggestion" data-text="My order hasn't arrived yet, it's been 8 days.">
+            <span class="suggestion-title">Track a late delivery</span>
+            <span class="suggestion-sub">It has been 8 days</span>
+          </button>
+          <button type="button" class="suggestion" data-text="I want to return a pair of earbuds I opened. Order NIM-48213907.">
+            <span class="suggestion-title">Return opened earbuds</span>
+            <span class="suggestion-sub">Check if I am eligible</span>
+          </button>
+          <button type="button" class="suggestion" data-text="How long does express shipping take and what does it cost?">
+            <span class="suggestion-title">Shipping options</span>
+            <span class="suggestion-sub">Times and fees</span>
+          </button>
+          <button type="button" class="suggestion" data-text="Can I still cancel an order that was dispatched this morning?">
+            <span class="suggestion-title">Cancel an order</span>
+            <span class="suggestion-sub">Already dispatched</span>
+          </button>
+        </div>
+      </section>
+
+    </main>
+
+    <div class="composer-wrap">
+      <div class="banner" id="banner" hidden role="alert"></div>
+
+      <form class="composer" id="composer" autocomplete="off">
+        <textarea
+          id="input"
+          rows="1"
+          maxlength="2000"
+          placeholder="Message Nimbus Support&hellip;"
+          aria-label="Message"
+        ></textarea>
+        <button type="submit" id="send-btn" class="send-btn" aria-label="Send message">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14M13 6l6 6-6 6" />
+          </svg>
+        </button>
+        <button type="button" id="stop-btn" class="send-btn stop" hidden aria-label="Stop generating">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+            <rect x="6" y="6" width="12" height="12" rx="2" />
+          </svg>
+        </button>
+      </form>
+
+      <p class="composer-hint">
+        <span id="model-badge" class="model-badge">local model</span>
+        Runs fully on this machine. <kbd>Enter</kbd> to send, <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line.
+      </p>
+    </div>
+
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
