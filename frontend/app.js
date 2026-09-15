@@ -24,6 +24,7 @@
     stop: document.getElementById("stop-btn"),
     reset: document.getElementById("reset-btn"),
     details: document.getElementById("details-btn"),
+    theme: document.getElementById("theme-btn"),
     status: document.getElementById("status"),
     statusText: document.getElementById("status-text"),
     banner: document.getElementById("banner"),
@@ -40,6 +41,61 @@
     pingTimer: null,
     manualClose: false,
   };
+
+  /* --------------------------------------------------------------- theme */
+
+  const THEME_KEY = "nimbus.theme";
+
+  function systemTheme() {
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
+  }
+
+  function applyTheme(theme) {
+    // Always stamp a concrete value rather than leaving it unset: the CSS icon
+    // rules and the toggle both key off data-theme, and "unset" would make the
+    // button show the wrong glyph.
+    document.documentElement.setAttribute("data-theme", theme);
+    if (el.theme) {
+      el.theme.title = theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
+    }
+  }
+
+  function initTheme() {
+    let stored = null;
+    try {
+      stored = localStorage.getItem(THEME_KEY);
+    } catch {
+      // Private window or blocked storage: fall back to the system preference.
+    }
+    applyTheme(stored === "light" || stored === "dark" ? stored : systemTheme());
+
+    // Follow the OS only while the user has not made an explicit choice.
+    if (!stored && window.matchMedia) {
+      const query = window.matchMedia("(prefers-color-scheme: dark)");
+      const onChange = (event) => {
+        let saved = null;
+        try {
+          saved = localStorage.getItem(THEME_KEY);
+        } catch {}
+        if (!saved) applyTheme(event.matches ? "dark" : "light");
+      };
+      if (query.addEventListener) query.addEventListener("change", onChange);
+      else if (query.addListener) query.addListener(onChange);
+    }
+  }
+
+  function toggleTheme() {
+    const next =
+      document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    applyTheme(next);
+    try {
+      localStorage.setItem(THEME_KEY, next);
+    } catch {
+      // Not persisting is acceptable; the toggle still works for this session.
+    }
+  }
 
   /* ----------------------------------------------------------- utilities */
 
@@ -384,6 +440,8 @@
     el.input.focus();
   });
 
+  if (el.theme) el.theme.addEventListener("click", toggleTheme);
+
   el.details.addEventListener("click", () => {
     state.showTelemetry = !state.showTelemetry;
     el.details.setAttribute("aria-pressed", String(state.showTelemetry));
@@ -409,6 +467,8 @@
   }
 
   /* ------------------------------------------------------------ bootstrap */
+
+  initTheme();
 
   try {
     state.sessionId = sessionStorage.getItem(SESSION_KEY);

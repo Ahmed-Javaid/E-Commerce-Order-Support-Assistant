@@ -688,8 +688,11 @@ Plain HTML/CSS/JS, no framework and no build step —
   stop control that aborts an in-flight generation.
 - **Honest empty state** — the welcome screen says Ava has no live access to the
   order system, so the user is never misled about what it can do.
-- Dark/light via `prefers-color-scheme`, responsive to ~375 px, keyboard
-  shortcuts, and `prefers-reduced-motion` respected.
+- **Light and dark**, with an explicit toggle that persists in `localStorage`
+  and otherwise follows the OS. A dotted background grid and a soft accent
+  wash keep the page from reading as a flat slab.
+- Responsive to ~375 px, keyboard shortcuts, and `prefers-reduced-motion`
+  respected.
 
 ---
 
