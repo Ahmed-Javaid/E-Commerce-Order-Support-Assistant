@@ -1,13 +1,14 @@
 """Static brand knowledge for the Nimbus order-support assistant.
 
-This module is deliberately a *constant*, not a database or an index. It is
-concatenated into the system prompt verbatim on every turn, which keeps the
-assignment's "no tools, no RAG" constraint satisfied: nothing is retrieved at
-query time and nothing is looked up per-user. The whole knowledge surface is
-small enough (~600 tokens) to live permanently in the context window.
+Everything here is a *constant*, not a database or an index: the brand policy
+and a six-order demo book, both concatenated into the system prompt verbatim on
+every turn. That keeps the assignment's "no tools, no RAG" constraint satisfied,
+because nothing is selected in response to the customer's question -- the model
+reads what is already in its context, exactly as it reads the policy text.
 
-If this block ever grows past ~800 tokens it should be trimmed rather than
-retrieved -- growing it into a searchable store would turn the system into RAG.
+The line this must not cross: the moment the order book grows large enough that
+we have to *choose* which rows to include, that choice is retrieval and the
+system becomes RAG. Six orders, always all present, stays on the safe side.
 """
 
 from __future__ import annotations
@@ -79,10 +80,10 @@ ORDER_LIFECYCLE = """\
 ORDER STATES (in order): PLACED -> PACKED -> DISPATCHED -> IN TRANSIT ->
 OUT FOR DELIVERY -> DELIVERED. Side states: ON HOLD (payment or address
 verification), RETURN IN PROGRESS, REFUNDED, CANCELLED.
-These are DEFINITIONS of the labels a customer sees on their own tracking page.
-You cannot determine which state any order is in. Only the customer can read
-that off their tracking page, or tell you. Never assign a state to an order
-yourself, and never say an order "is" or "is now in" any of these states.
+You may state the status of an order ONLY if that exact order reference appears
+in the DEMO ORDER BOOK below and the customer has given the matching email. For
+any other reference, you do not know the status and must say so instead of
+guessing.
 - Cancellation is free and instant while the order is PLACED or PACKED.
 - Once DISPATCHED an order cannot be cancelled; it must be refused at the
   door or returned after delivery.
@@ -106,6 +107,109 @@ IDENTIFIERS:
 - To act on an order the customer must supply the order reference AND the
   email address the order was placed with."""
 
+
+# --------------------------------------------------------------------------
+# Demo order book
+# --------------------------------------------------------------------------
+#
+# Six orders, chosen so that between them they exercise every policy branch:
+# in-transit, delivered-and-returnable, delivered-past-window, cancellable,
+# already-dispatched, and on-hold.
+#
+# Why this is not RAG. The entire book is rendered into the system prompt on
+# every single turn, exactly like the policy text above. Nothing is selected in
+# response to the customer's question, there is no index, and no code fetches a
+# record to answer a query -- the model simply reads what is already in its
+# context. That is prompt design. It would become retrieval the moment the book
+# grew large enough that we had to pick which rows to include, which is the
+# reason it is capped at six and lives in a constant rather than a file.
+
+ORDERS: dict[str, dict[str, str]] = {
+    "NIM-40011234": {
+        "email": "sara.k@example.com",
+        "item": "Nimbus Aura 2 wireless earbuds",
+        "price": "PKR 8,900",
+        "tier": "Express",
+        "placed": "12 days ago",
+        "status": "IN TRANSIT",
+        "returnable": "not yet - not delivered",
+        "note": "Dispatched 10 days ago. Last carrier scan was 6 days ago, so this "
+                "one is close to the 10-business-day lost-parcel threshold.",
+    },
+    "NIM-77881122": {
+        "email": "amir@example.com",
+        "item": "Nimbus Pulse fitness band",
+        "price": "PKR 6,400",
+        "tier": "Standard",
+        "placed": "14 days ago",
+        "status": "DELIVERED",
+        "returnable": "yes - delivered 8 days ago, inside the 30-day window",
+        "note": "Delivered 8 days ago, so it is inside the 30-day return window.",
+    },
+    "NIM-55220147": {
+        "email": "zoya@example.com",
+        "item": "Nimbus Halo smart bulb, 2-pack",
+        "price": "PKR 3,200",
+        "tier": "Standard",
+        "placed": "47 days ago",
+        "status": "DELIVERED",
+        "returnable": "no - delivered 41 days ago, PAST the 30-day window",
+        "note": "Delivered 41 days ago, so it is PAST the 30-day return window. A "
+                "fault would still be covered by the 12-month warranty.",
+    },
+    "NIM-90014455": {
+        "email": "bilal@example.com",
+        "item": "Nimbus Volt 65W charger",
+        "price": "PKR 4,100",
+        "tier": "Priority",
+        "placed": "1 hour ago",
+        "status": "PLACED",
+        "returnable": "not yet - not delivered",
+        "note": "Still PLACED, so it can be cancelled free and the address can "
+                "still be changed.",
+    },
+    "NIM-31556780": {
+        "email": "hina@example.com",
+        "item": "Nimbus Vista indoor camera",
+        "price": "PKR 11,500",
+        "tier": "Express",
+        "placed": "2 days ago",
+        "status": "DISPATCHED",
+        "returnable": "not yet - not delivered",
+        "note": "Dispatched this morning, so it can NO LONGER be cancelled. It must "
+                "be refused at the door or returned after delivery.",
+    },
+    "NIM-62003391": {
+        "email": "omar@example.com",
+        "item": "Nimbus Echo desk speaker",
+        "price": "PKR 7,750",
+        "tier": "Standard",
+        "placed": "3 days ago",
+        "status": "ON HOLD",
+        "returnable": "not yet - not delivered",
+        "note": "On hold for address verification. The customer must confirm their "
+                "delivery address before it will move on.",
+    },
+}
+
+
+def _render_orders() -> str:
+    lines = [
+        "DEMO ORDER BOOK (the only orders that exist; anything not listed here does",
+        "not exist and you must say so rather than guessing):",
+    ]
+    for order_id, o in ORDERS.items():
+        lines.append(
+            f"- {order_id} | {o['email']} | {o['item']} | {o['price']} | "
+            f"{o['tier']} | placed {o['placed']} | STATUS: {o['status']} | "
+            f"RETURNABLE: {o['returnable']}"
+        )
+        lines.append(f"    {o['note']}")
+    return "\n".join(lines)
+
+
+ORDER_BOOK = _render_orders()
+
 # The single string that gets injected into the system prompt.
 KNOWLEDGE_BLOCK = "\n\n".join(
     [
@@ -115,5 +219,6 @@ KNOWLEDGE_BLOCK = "\n\n".join(
         RETURNS_POLICY,
         PAYMENT_POLICY,
         IDENTIFIERS,
+        ORDER_BOOK,
     ]
 )

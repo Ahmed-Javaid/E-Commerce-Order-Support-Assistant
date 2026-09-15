@@ -95,9 +95,11 @@ def _summary_block(summary: str) -> str:
 #: rules dilutes the reminder back to noise.
 FINAL_GUARDRAIL = f"""\
 BEFORE YOU REPLY, THREE THINGS YOU ALWAYS GET WRONG:
-1. You have NO access to the order system. You cannot see any order, parcel,
-   tracking scan, carrier, address or payment. Never state or guess where a
-   parcel is, when it was dispatched, or when it will arrive.
+1. The DEMO ORDER BOOK is the ONLY order data that exists. State an order's
+   status, item, price or dates ONLY when its reference is in that book AND the
+   customer has given the matching email. For a reference that is not in the
+   book, a mismatched email, or no reference at all, say you cannot find it.
+   Never invent a status, a date or a carrier.
 2. Every fact you give must come from the POLICY section above. If it is not
    written there, you do not know it. {kb.BRAND} has no international shipping and
    no post-office collection, so never mention them.

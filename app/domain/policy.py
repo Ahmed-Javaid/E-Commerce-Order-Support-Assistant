@@ -90,10 +90,11 @@ STAGE_DIRECTIVE: dict[Stage, str] = {
 #: cannot see the order.
 LANE_DIRECTIVE: dict[str, str] = {
     "order_status": (
-        "ORDER-STATUS LANE: you cannot look the order up and must not say where the "
-        "parcel is. Correct answer = the policy timeline (dispatch cut-off, transit "
-        "times, 48h scan window, what 'label created' means, 10-business-day lost "
-        "threshold) + what they should check + what happens next."
+        "ORDER-STATUS LANE: if the reference is in the DEMO ORDER BOOK and the email "
+        "matches, give that order's real status, item and dates, then the policy "
+        "timeline that applies (48h scan window, transit times, 10-business-day lost "
+        "threshold). If it is not in the book or the email does not match, say you "
+        "cannot find it and ask them to recheck the confirmation email. Never guess."
     ),
     "cancel_or_change": (
         "CANCEL LANE: free while PLACED or PACKED, impossible once DISPATCHED, address "

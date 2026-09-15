@@ -285,8 +285,8 @@ practical. She is explicitly *not* a salesperson and not a chirpy brand mascot.
 
 | Will | Will not |
 |---|---|
-| Explain shipping tiers, costs, cut-offs and transit times | Claim to see a specific order, parcel, scan or payment |
-| Decide return eligibility from delivery date + item type | State a delivery date, tracking status, carrier or location |
+| Look up any of the six demo orders, once the reference **and** email match | Say anything about an order that is not in the book, or whose email does not match |
+| Explain shipping tiers, costs, cut-offs and transit times | Invent a delivery date, a carrier, or a named day |
 | Explain the warranty route for a faulty item | Issue an RMA number or a refund itself |
 | Collect and confirm an order reference and account email | Grant a refund, discount, extension or goodwill credit |
 | Explain cancellation and address-change windows | Answer anything outside Nimbus order support |
@@ -438,7 +438,36 @@ answers with a fallback, which is worse than no detector. Both directions are
 regression-tested in
 [`tests/test_fabrication_detector.py`](tests/test_fabrication_detector.py).
 
-### 3.6 Example dialogues
+### 3.7 Demo order book — what you can actually test
+
+Six orders live permanently in the system prompt. Use the reference **with its
+matching email** to get a real answer; use anything else to see the assistant
+refuse rather than guess.
+
+| Order | Email | Item | Status | Returnable |
+|---|---|---|---|---|
+| `NIM-40011234` | `sara.k@example.com` | Nimbus Aura 2 wireless earbuds | **IN TRANSIT** | not yet - not delivered |
+| `NIM-77881122` | `amir@example.com` | Nimbus Pulse fitness band | **DELIVERED** | yes - delivered 8 days ago, inside the 30-day window |
+| `NIM-55220147` | `zoya@example.com` | Nimbus Halo smart bulb, 2-pack | **DELIVERED** | no - delivered 41 days ago, PAST the 30-day window |
+| `NIM-90014455` | `bilal@example.com` | Nimbus Volt 65W charger | **PLACED** | not yet - not delivered |
+| `NIM-31556780` | `hina@example.com` | Nimbus Vista indoor camera | **DISPATCHED** | not yet - not delivered |
+| `NIM-62003391` | `omar@example.com` | Nimbus Echo desk speaker | **ON HOLD** | not yet - not delivered |
+
+Between them they cover every policy branch: in transit, delivered-and-returnable,
+delivered-past-window, cancellable, too-late-to-cancel, and on-hold.
+
+**Is this RAG?** No. The whole book is rendered into the system prompt on every
+turn, exactly like the policy text — nothing is selected in response to the
+question, there is no index, and no code fetches a record to answer a query. The
+model reads what is already in its context. It *would* become retrieval the
+moment the book grew large enough that we had to choose which rows to include,
+which is precisely why it is capped at six and lives in a constant.
+
+**Identity is enforced.** A reference alone proves nothing — anyone could guess
+one — so the email must match too. Try `NIM-40011234` with `attacker@example.com`
+and the assistant declines to reveal the status.
+
+### 3.8 Example dialogues
 
 Three full transcripts — happy path, return with a mid-conversation topic
 switch, and adversarial probing — are in

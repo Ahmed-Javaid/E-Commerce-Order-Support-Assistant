@@ -461,7 +461,16 @@ class ConversationManager:
         # running it on policy answers would risk false positives for no benefit.
         corrected = ""
         if session.intent in pol.IDENTIFIED_INTENTS:
-            offending = find_fabrication(answer)
+            # The pinned identity decides what counts as fabrication: for a
+            # verified order (reference in the book AND matching email) the
+            # record is already in the model's prompt, so stating its status is
+            # correct and only a *contradicting* status is caught. Without that
+            # identity, any claim about the parcel is invented.
+            offending = find_fabrication(
+                answer,
+                order_id=session.facts.get("order_id"),
+                email=session.facts.get("email"),
+            )
             if offending:
                 corrected = offending
                 # The fabricated text is replaced in history too, so it cannot be

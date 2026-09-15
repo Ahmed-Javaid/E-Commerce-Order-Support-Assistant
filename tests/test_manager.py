@@ -350,7 +350,7 @@ async def test_fabricated_order_state_is_replaced(session) -> None:
 
     correction = next((e for e in events if e.type == "correction"), None)
     assert correction is not None, "no correction event was emitted"
-    assert "cannot see your order" in correction.text
+    assert "cannot confirm anything about that order" in correction.text
 
     # The fabrication must not survive in history either, or the next turn
     # would treat it as established context.
@@ -418,3 +418,60 @@ async def test_history_is_replayed_as_raw_customer_words(manager, session, engin
     for content in replayed:
         assert "CURRENT STAGE" not in content
         assert "internal guidance" not in content
+
+
+async def test_verified_order_status_is_allowed(session) -> None:
+    """A real order + matching email: the record is in the prompt, so stating it is correct."""
+    engine = MockEngine(
+        token_delay=0.0,
+        first_token_delay=0.0,
+        canned="Your order is currently in transit and was dispatched 10 days ago.",
+    )
+    manager = ConversationManager(engine)
+    events, _ = await drain(
+        manager, session, "where is NIM-40011234? email sara.k@example.com"
+    )
+    assert not any(e.type == "correction" for e in events), "a verified status was blocked"
+    assert "in transit" in session.turns[-1].assistant
+
+
+async def test_unknown_order_status_is_blocked(session) -> None:
+    """Same sentence, an order that does not exist: still a fabrication."""
+    engine = MockEngine(
+        token_delay=0.0,
+        first_token_delay=0.0,
+        canned="Your order is currently in transit and was dispatched 10 days ago.",
+    )
+    manager = ConversationManager(engine)
+    events, _ = await drain(
+        manager, session, "where is NIM-99999999? email ghost@example.com"
+    )
+    assert any(e.type == "correction" for e in events), "an invented status got through"
+
+
+async def test_email_mismatch_blocks_status(session) -> None:
+    """A real reference is not enough -- anyone could guess one."""
+    engine = MockEngine(
+        token_delay=0.0,
+        first_token_delay=0.0,
+        canned="Your order is currently in transit.",
+    )
+    manager = ConversationManager(engine)
+    events, _ = await drain(
+        manager, session, "where is NIM-40011234? email attacker@example.com"
+    )
+    assert any(e.type == "correction" for e in events), "wrong email should block status"
+
+
+async def test_contradicting_the_record_is_blocked(session) -> None:
+    """Verified order, but the model asserts a status the book disagrees with."""
+    engine = MockEngine(
+        token_delay=0.0,
+        first_token_delay=0.0,
+        canned="Your order has been delivered already.",
+    )
+    manager = ConversationManager(engine)
+    events, _ = await drain(
+        manager, session, "where is NIM-40011234? email sara.k@example.com"
+    )
+    assert any(e.type == "correction" for e in events), "contradiction of the record got through"
