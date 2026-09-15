@@ -3,6 +3,11 @@
 **NLP Assignment 1 — Conversational AI system**
 Domain: **E-Commerce Order Support Assistant**
 
+| Roll number | Name |
+|---|---|
+| 22-2530 | Ahmed Javaid |
+| 22i-2470 | Ammad Ashraf |
+
 A customer-support chat agent for *Nimbus*, a fictional online electronics and
 smart-home retailer. It runs a quantized open-weight LLM entirely on the local
 CPU, streams responses token-by-token over a WebSocket, keeps conversation state
@@ -29,7 +34,8 @@ same session.
 9. [Testing](#9-testing)
 9b. [Bonus claim](#9b-bonus-claim--ux--persona-polish)
 10. [Known limitations](#10-known-limitations)
-11. [Repository layout](#11-repository-layout)
+11. [Submission](#11-submission)
+12. [Repository layout](#12-repository-layout)
 
 ---
 
@@ -1051,7 +1057,52 @@ output quality is not something this project measured.
 
 ---
 
-## 11. Repository layout
+## 11. Submission
+
+**Group of two**
+
+| Roll number | Name |
+|---|---|
+| 22-2530 | Ahmed Javaid |
+| 22i-2470 | Ammad Ashraf |
+
+**Contents of this repository**
+
+| Item | Where |
+|---|---|
+| Backend source | [`app/`](app/) — API, conversation manager, domain layer, LLM engines |
+| Frontend source | [`frontend/`](frontend/) — `index.html`, `app.js`, `styles.css` |
+| Test cases | [`tests/`](tests/) — 166 tests, `python -m pytest` |
+| Scripts | [`scripts/`](scripts/) — benchmarks, evaluation, failure drill, transcripts |
+| Documentation | this README, plus [`docs/`](docs/) for raw benchmark and evaluation output |
+
+**Reproducing every number in this README**
+
+```bash
+.venv/Scripts/python.exe -m pytest
+```
+
+```bash
+.venv/Scripts/python.exe scripts/benchmark.py --all --rounds 3 --concurrent 4
+```
+
+```bash
+.venv/Scripts/python.exe scripts/evaluate.py -v
+```
+
+```bash
+.venv/Scripts/python.exe scripts/failure_drill.py
+```
+
+The last two need Ollama running with the model pulled; the test suite does not.
+
+**Declaration.** All work in this repository is our own. Generative AI was used
+as a coding assistant, as the brief permits; we understand the code and can
+explain and reproduce it.
+
+---
+
+## 12. Repository layout
 
 ```
 assignment-1/
