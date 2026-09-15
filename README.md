@@ -5,7 +5,7 @@ Domain: **E-Commerce Order Support Assistant**
 
 | Roll number | Name |
 |---|---|
-| 22-2530 | Ahmed Javaid |
+| 22i-2530 | Ahmed Javaid |
 | 22i-2470 | Ammad Ashraf |
 
 A customer-support chat agent for *Nimbus*, a fictional online electronics and
@@ -34,6 +34,7 @@ same session.
 9. [Testing](#9-testing)
 9b. [Bonus claim](#9b-bonus-claim--ux--persona-polish)
 10. [Known limitations](#10-known-limitations)
+10b. [Viva prep](#10b-viva-prep)
 11. [Submission](#11-submission)
 12. [Repository layout](#12-repository-layout)
 
@@ -196,6 +197,58 @@ user message
   ├─ commit turn ....... append to session history
   └─ refresh summary ... only if history was evicted, AFTER the answer is shown
 ```
+
+### One turn, end to end
+
+The component diagram shows *what exists*; this shows *what happens*, including
+where the two safety mechanisms sit and why the customer sees text before the
+model has finished thinking.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Browser
+    participant WS as /ws/chat
+    participant CM as Conversation Manager
+    participant OL as Ollama (CPU)
+
+    U->>WS: {"type":"chat","message":"where is my order?"}
+    WS->>CM: stream_turn(session, message)
+
+    rect rgb(253, 232, 228)
+        Note over CM: validate · guard (regex)
+        CM->>CM: off-domain? inject a steer instruction
+    end
+
+    rect rgb(234, 240, 255)
+        Note over CM: classify lane · pin order ref + email<br/>advance stage · plan context window
+    end
+
+    CM->>OL: system (cached prefix) + history + new turn
+    Note over OL: prompt eval ~64 tok/s<br/>decode ~12 tok/s
+
+    WS-->>U: {"type":"start","stage":"order_identification"}
+    loop every token
+        OL-->>CM: delta
+        CM-->>WS: delta
+        WS-->>U: {"type":"token","text":"…"}
+    end
+
+    rect rgb(253, 232, 228)
+        Note over CM: scrub scaffolding · verify no invented order state
+        CM-->>WS: {"type":"correction"} only if a fabrication was caught
+        WS-->>U: replace the message
+    end
+
+    WS-->>U: {"type":"done","stats":{…},"context":{…}}
+    Note over CM: rolling summary refreshes here —<br/>after the answer is already on screen
+```
+
+Two things worth noticing. The `done` frame is sent **before** the rolling
+summary runs, so compression never costs the customer latency. And the
+`correction` frame exists because tokens are streamed as they arrive — by the
+time verification can inspect a complete reply, the customer has already read
+it, so the fix is a replacement rather than a block.
 
 ### Why the layers are split this way
 
@@ -976,6 +1029,17 @@ cannot tell you whether the assistant stays in character:
 
 Claiming the **UX/persona polish** bonus (one only, per the brief), on two grounds:
 
+**Why not the cloud-deployment option.** The brief allows one bonus, and the
+alternative was deploying to a free-tier host such as Vercel. That is not
+achievable for this system rather than merely inconvenient: Vercel runs
+short-lived serverless functions with no persistent process, a bundle limit far
+below the 1.9 GB of model weights, an execution ceiling in the tens of seconds
+against generations that take ~25 s, and no support for the long-lived
+WebSocket this API is built on. Any "deployment" would have had to call a hosted
+model API, which the assignment forbids outright ("no cloud model APIs"). A
+GPU-backed VM would work, but that is not free-tier and is not what the bonus
+described. So the honest choice was the option this system can actually satisfy.
+
 **Persona holds under adversarial testing.** `scripts/evaluate.py` includes four
 adversarial scenarios — persona override, system-prompt extraction, pressure for
 a policy exception, and a demand for a live order lookup. The persona survives
@@ -1057,13 +1121,49 @@ output quality is not something this project measured.
 
 ---
 
+## 10b. Viva prep
+
+**Where everything lives**
+
+| File | Does | Likely question |
+|---|---|---|
+| [`domain/knowledge.py`](app/domain/knowledge.py) | Static Nimbus policy text | "Is this RAG?" No — no retrieval step, no index. It is a constant in the prompt. |
+| [`domain/policy.py`](app/domain/policy.py) | Stages, lanes, guard, intent/slot regexes | "How do you refuse off-topic?" Four layers; see §3.5. |
+| [`domain/prompts.py`](app/domain/prompts.py) | Builds the prompt | "Why is the system prompt fixed?" KV-cache prefix; see §8.1. |
+| [`domain/verification.py`](app/domain/verification.py) | Blocks invented order data | "Why not just prompt it?" We tried three times; it never hit zero. |
+| [`conversation/manager.py`](app/conversation/manager.py) | Orchestrates one turn | The main walkthrough file. |
+| [`conversation/memory.py`](app/conversation/memory.py) | Picks which turns to replay | "What happens at turn 50?" Oldest evicted, facts pinned, summary rolls. |
+| [`conversation/session.py`](app/conversation/session.py) | Session + bounded store | "Why bounded?" Client-supplied ids would otherwise exhaust memory. |
+| [`llm/base.py`](app/llm/base.py) | The engine contract | "Why an interface?" Lets 166 tests run with no model in 2.5 s. |
+| [`api/main.py`](app/api/main.py) | REST + WebSocket | "How do you not block?" Async throughout; CPU work is in Ollama's process. |
+
+**Five decisions, and the reason for each**
+
+1. **Fixed system prompt, turn context on the last message.** Turn-specific text in
+   the system prompt put the history past the cache boundary and re-read the whole
+   conversation each turn. Fixing it halved TTFT (§8.1).
+2. **Facts pinned outside the history window.** A sliding window alone loses the
+   order reference by turn nine. Pinning costs ~20 tokens and fixes it (§4.2).
+3. **Guard detects deterministically, model writes the refusal.** Regex is
+   consistent where a 3B model is not; keeping the wording model-generated keeps
+   us inside "prompt orchestration alone" (§3.5).
+4. **Output verification.** Prompting reduced invented order status but never
+   removed it, so a narrow detector replaces those replies (§3.5, layer 4).
+5. **3B over 1.5B.** Measured, not assumed: 92.5% vs 88% on the same suite, for
+   ~1.8x slower decode (§4.1).
+
+**Numbers to know:** ~8 s TTFT, ~12 tok/s decode, ~64 tok/s prompt eval, 4,096
+context, ~1,780-token cached prefix, ~206 tokens re-evaluated per turn, 166 tests.
+
+---
+
 ## 11. Submission
 
 **Group of two**
 
 | Roll number | Name |
 |---|---|
-| 22-2530 | Ahmed Javaid |
+| 22i-2530 | Ahmed Javaid |
 | 22i-2470 | Ammad Ashraf |
 
 **Contents of this repository**
