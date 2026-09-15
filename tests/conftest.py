@@ -70,3 +70,14 @@ def last_chat_prompt(engine: MockEngine):
         if call and call[0].role == "system" and "You are Ava" in call[0].content:
             return call
     raise AssertionError("no chat prompt was recorded")
+
+
+def prompt_text(engine: MockEngine) -> str:
+    """All text the model was shown for the most recent chat turn.
+
+    Turn-specific guidance (stage, pinned facts, notes) lives in the final user
+    message rather than the system prompt, so that the system prompt stays
+    byte-identical and the KV-cache prefix keeps growing. Assertions therefore
+    check the whole prompt, not one message of it.
+    """
+    return chr(10).join(m.content for m in last_chat_prompt(engine))

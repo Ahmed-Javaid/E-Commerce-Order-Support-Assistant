@@ -27,6 +27,7 @@ same session.
 7. [Phase V — Web interface](#7-phase-v--web-interface)
 8. [Phase VI — Benchmarks and evaluation](#8-phase-vi--benchmarks-and-evaluation)
 9. [Testing](#9-testing)
+9b. [Bonus claim](#9b-bonus-claim--ux--persona-polish)
 10. [Known limitations](#10-known-limitations)
 11. [Repository layout](#11-repository-layout)
 
@@ -116,6 +117,7 @@ Every setting is an environment variable with a sane default — see
 | `NIMBUS_CONTEXT_WINDOW` | `4096` | Runtime context size |
 | `NIMBUS_HISTORY_TOKEN_BUDGET` | `1400` | Tokens of verbatim dialogue replayed |
 | `NIMBUS_MAX_CONCURRENT_GENERATIONS` | `4` | Process-wide generation cap |
+| `NIMBUS_GUARD_MODE` | `steer` | `steer` (model writes refusals), `reply` (canned), `off` |
 
 To run the smaller/faster model instead:
 
@@ -330,6 +332,24 @@ It is deliberately **conservative**: anything it is not confident about passes
 through to the model. Legitimate-but-superficially-similar messages are
 explicitly tested — *"is the Nimbus smart plug compatible with my home
 automation setup?"* and *"my promo code did not apply"* both pass.
+
+**Guard modes.** There is a genuine tension between wanting deterministic
+*detection* and the assignment's rule that *"every response must come from
+prompt orchestration and conversational memory alone"* — a hardcoded refusal is
+not model-generated. `NIMBUS_GUARD_MODE` resolves it explicitly:
+
+| Mode | Detection | Who writes the reply | Cost |
+|---|---|---|---|
+| **`steer`** (default) | regex, deterministic | **the model**, from an injected instruction | one normal generation |
+| `reply` | regex, deterministic | a canned string, model never called | ~1 ms |
+| `off` | none | the model, guided only by the system prompt | one normal generation |
+
+The default is **`steer`**: the regex decides *that* a message is off-domain,
+and the model decides *how* to decline. That keeps every customer-visible word
+model-generated — fully inside the constraint — while still getting consistent,
+free detection. `reply` remains available when latency matters more than having
+the text generated, and `off` demonstrates that the system prompt alone still
+refuses (it does, just less reliably).
 
 **Layer 2 — system prompt.** Rule 1 of `HARD_RULES` scopes the assistant, and
 `FINAL_GUARDRAIL` restates the two most-violated rules in the last position of
@@ -652,37 +672,49 @@ Raw output: [`docs/benchmarks-3b.md`](docs/benchmarks-3b.md),
 
 #### Realistic multi-turn conversation (the number that counts)
 
-`python scripts/benchmark.py --conversation` — one 8-turn support conversation:
+`python scripts/benchmark.py --conversation` — one 8-turn support conversation
+through the real conversation manager:
 
-| # | Customer says | Stage | Prompt tok | TTFT | Total |
-|---|---|---|---:|---:|---:|
-| 1 | hi | greeting | 1,786 | 5.0 s | 9.3 s |
-| 2 | my order still has not turned up… | order identification | 2,052 | 9.4 s | 22.7 s |
-| 3 | it is NIM-40011234 and… | policy resolution | 2,214 | 12.7 s | 29.3 s |
-| 4 | the tracking page says label created | confirmation | 2,355 | 14.3 s | 31.4 s |
-| 5 | what if it never gets scanned? | policy resolution | 2,551 | 17.9 s | 36.1 s |
-| 6 | separate question: express shipping? | policy resolution | 2,608 | 19.1 s | 25.9 s |
-| 7 | back to the parcel, what next? | policy resolution | 2,664 | 19.8 s | 32.0 s |
-| 8 | thanks, that is all | closing | 2,776 | 22.4 s | 25.1 s |
+| Metric | Before optimisation | **After** |
+|---|---:|---:|
+| TTFT median | 16.1 s | **7.9 s** |
+| TTFT, steady-state turns | 15.1 s mean | **6.5 s mean** |
+| Total response mean | 26.5 s | 25.4 s |
 
-**TTFT mean 15.1 s, median 16.1 s, p95 21.5 s. Total response mean 26.5 s.**
+**What changed, and why it worked.** The original layout appended the stage
+directive, pinned facts and per-turn notes to the *system prompt*. Since the
+dialogue history sits after the system message, that divergence at ~token 1,650
+put **every history turn on the far side of the cache boundary** — so each turn
+re-read the whole conversation. The evidence was that TTFT tracked *total*
+prompt tokens (1,786 → 2,776 → 5 s → 22 s) rather than new ones.
 
-That is slow, and the cause is specific rather than mysterious: **the cached
-prefix only covers the part of the prompt that does not change.** The persona
-and policy block (~1,650 tokens) is shared and cached, but the stage directive,
-lane directive, pinned facts and per-turn notes all change every turn, and
-everything after the first divergence has to be re-evaluated at ~64 tok/s.
-Prompt tokens climb from 1,786 to 2,776 across the conversation, and TTFT climbs
-with them almost linearly.
+Two fixes:
 
-Two honest consequences:
+1. **Moved all turn-specific context out of the system prompt** and into the
+   final user message. The system prompt is now byte-identical every turn and
+   history entries are the customer's raw words, so the cacheable prefix grows
+   by appending instead of being invalidated:
 
-- The context budget is doing real work. Without it the prompt would pass 4,096
-  tokens by turn twelve and TTFT would keep climbing past 30 s.
-- The block ordering could be pushed further. Moving the *stage and lane
-  directives above the pinned facts and notes* would extend the stable prefix by
-  a few hundred tokens. That was identified from this measurement and is the
-  first thing to try next, not something already claimed as done.
+   ```
+   [ system: fixed ] [ turn 1 ] [ turn 2 ] … [ new turn + context ]
+   \________________ cached, grows by appending ________________/  ^ only this
+   ```
+
+   `test_system_prompt_is_identical_across_turns` and
+   `test_history_is_replayed_as_raw_customer_words` stop this regressing.
+
+2. **Rewrote the stage and lane directives from prose to clipped imperatives.**
+   They ride past the cached prefix, so unlike the policy block every token is
+   re-evaluated every turn — 206 tokens now, down from ~350.
+
+TTFT also stopped climbing with conversation length, which was the real defect.
+Two outlier turns in the published run (29.9 s and 22.3 s) are Ollama reloading
+an evicted model, not prompt cost; the median is the honest figure.
+
+**Still not fast.** ~8 s to first token on six CPU cores is a demo-grade number,
+not a production one. Remaining levers, in order: shrink the 930-token policy
+block, or use a GPU (188 tok/s on the RTX 3080 versus 12 on CPU) — which this
+assignment rules out.
 
 #### Single-turn latency (repeated identical prompt — best case)
 
@@ -910,7 +942,7 @@ get a slow-but-complete answer rather than eight users all timing out.
 ```
 
 ```
-162 passed in 1.98s
+166 passed in 3.54s
 ```
 
 
@@ -931,6 +963,31 @@ cannot tell you whether the assistant stays in character:
 ```bash
 .venv/Scripts/python.exe scripts/evaluate.py -v
 ```
+
+---
+
+## 9b. Bonus claim — UX / persona polish
+
+Claiming the **UX/persona polish** bonus (one only, per the brief), on two grounds:
+
+**Persona holds under adversarial testing.** `scripts/evaluate.py` includes four
+adversarial scenarios — persona override, system-prompt extraction, pressure for
+a policy exception, and a demand for a live order lookup. The persona survives
+all of them, and the one failure mode that prompting could not eliminate
+(inventing order status) is caught by a dedicated verification layer (§3.5,
+layer 4) that replaces the reply before the customer sees it. The evaluation
+reports how often that fires rather than hiding it inside the score.
+
+**UI beyond what Phase V asks for.** Phase V requires streaming, history, reset
+and a non-confusing layout. Beyond that: a **Telemetry** toggle exposing live
+per-turn TTFT, tok/s, token counts and the context-window state
+(`ctx 4/17 turns`, `evicted 13`, `pinned: email, order_id`) so the memory scheme
+in §4.2 is visible while you use it; guarded and corrected replies tinted and
+labelled so the safety mechanisms are legible rather than silent; an honest
+empty state that tells the user up front there is no live order access;
+auto-reconnect with backoff and a 25 s heartbeat; a stop control; session
+resume across refresh; light/dark; responsive to ~375 px; and
+`prefers-reduced-motion` respected. No framework and no build step — three files.
 
 ---
 
@@ -956,7 +1013,7 @@ and the server cannot be scaled to multiple workers without a shared store.
 Bounded at 500 sessions with 1-hour TTL and LRU eviction, so it degrades
 predictably rather than exhausting memory.
 
-**Latency in real conversations is high.** 15 s to first token and ~27 s to a
+**Latency in real conversations is high.** ~8 s to first token and ~25 s to a
 complete answer (§8.1) is usable for a demo and too slow for production. It is
 not an architectural problem — it is ~64 tok/s of prompt evaluation on six CPU
 cores against a ~2,500-token prompt. The fixes, in order of expected value:

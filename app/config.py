@@ -73,6 +73,16 @@ class Settings:
     # NIMBUS_FORCE_CPU=0 lifts the pin (useful only for A/B measurement).
     force_cpu: bool = field(default_factory=lambda: _env_bool("NIMBUS_FORCE_CPU", True))
 
+    # How the deterministic guard answers an off-domain or persona-override
+    # message. The assignment requires that every response come from prompt
+    # orchestration and conversational memory alone, so the default is "steer":
+    # the guard still *detects* deterministically, but the refusal is written by
+    # the model from an injected instruction. "reply" returns a canned string
+    # without calling the model at all -- faster and perfectly consistent, but
+    # the text is not model-generated. "off" disables the guard entirely and
+    # leaves refusals to the system prompt.
+    guard_mode: str = field(default_factory=lambda: _env_str("NIMBUS_GUARD_MODE", "steer"))
+
     # --- Context-memory management -------------------------------------
     # Token budget available for *dialogue history* after the system prompt
     # and the reserved generation space have been subtracted.

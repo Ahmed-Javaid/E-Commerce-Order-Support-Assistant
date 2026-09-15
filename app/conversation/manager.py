@@ -8,13 +8,15 @@ What it does per turn, in order:
 
 1. **Validate** the message (empty, oversized, non-text).
 2. **Guard** it deterministically -- persona-override attempts and blatantly
-   off-domain requests are answered from a canned reply without ever reaching
-   the model. Cheap, instant, and perfectly consistent.
+   off-domain requests are detected by regex. By default the model still
+   writes the refusal (guard_mode=steer), so every customer-visible word is
+   model-generated; guard_mode=reply returns a canned string instead.
 3. **Track state** -- classify the support lane, extract identifiers into pinned
    facts, detect a mid-conversation topic switch and suspend the previous lane.
 4. **Advance the stage machine** so the prompt tells the model where it is.
-5. **Build the prompt** -- stable system prefix, then summary, pinned facts,
-   stage directive, then the verbatim history window, then the new message.
+5. **Build the prompt** -- a byte-identical system prompt, the verbatim history
+   window, then the new message with this turn's context attached. That layout
+   keeps the runtime's KV-cache prefix growing instead of being invalidated.
 6. **Stream** the answer, post-processing each delta.
 7. **Commit** the turn and, if history was evicted, refresh the rolling summary
    *after* the answer is already on screen so the customer never waits for it.
@@ -43,6 +45,8 @@ from app.domain.prompts import (
     SUMMARISER_SYSTEM,
     build_summariser_prompt,
     build_system_prompt,
+    build_turn_context,
+    compose_user_turn,
 )
 from app.domain.verification import find_fabrication, safe_fallback
 from app.llm.base import ChatMessage, GenerationStats, LLMEngine, LLMError
@@ -223,20 +227,24 @@ class ConversationManager:
             settings.min_verbatim_turns,
         )
 
-        system = build_system_prompt(
+        # The system prompt is byte-identical every turn, and history entries are
+        # the customer's raw words, so the whole prefix up to the newest message
+        # stays cacheable and only the new turn is evaluated. See
+        # build_system_prompt() for the measurement behind this layout.
+        messages: list[ChatMessage] = [ChatMessage("system", build_system_prompt())]
+        for turn in plan.kept:
+            messages.append(ChatMessage("user", turn.user))
+            if turn.assistant:
+                messages.append(ChatMessage("assistant", turn.assistant))
+
+        context = build_turn_context(
             stage=session.stage,
             facts=session.facts,
             summary=session.summary,
             notes=notes,
             lane=session.intent.value,
         )
-
-        messages: list[ChatMessage] = [ChatMessage("system", system)]
-        for turn in plan.kept:
-            messages.append(ChatMessage("user", turn.user))
-            if turn.assistant:
-                messages.append(ChatMessage("assistant", turn.assistant))
-        messages.append(ChatMessage("user", user_message))
+        messages.append(ChatMessage("user", compose_user_turn(context, user_message)))
 
         report: dict[str, object] = {
             "turns_total": len(session.turns),
@@ -338,8 +346,33 @@ class ConversationManager:
         message = self.validate(raw_message)
         session.touch()
 
-        # 1. Deterministic guard -- never reaches the model.
-        verdict = pol.guard(message)
+        # 1. Deterministic guard.
+        #
+        # There is a real tension here. Detection should be deterministic -- a
+        # regex is consistent in a way a 3B model's judgement is not -- but the
+        # assignment requires every response to come from prompt orchestration
+        # and conversational memory alone, and a hardcoded string is neither.
+        # So detection is always deterministic and *who writes the reply* is
+        # configurable:
+        #
+        #   steer (default) -- inject an instruction, let the model write the
+        #       refusal. Every customer-visible word stays model-generated.
+        #   reply           -- return a canned string, never calling the model.
+        #       Instant and perfectly consistent, but not generated.
+        #   off             -- no guard; refusals rest on the system prompt.
+        #
+        # See README section 3.5.
+        verdict = (
+            pol.guard(message) if settings.guard_mode != "off" else pol.GuardVerdict(False)
+        )
+        guard_reason = verdict.reason
+        guard_note = ""
+        if verdict.blocked and settings.guard_mode == "steer":
+            guard_note = pol.GUARD_STEER.get(verdict.reason, "")
+            if guard_note:
+                # Fall through to the normal model path, carrying the steer.
+                verdict = pol.GuardVerdict(False)
+
         if verdict.blocked:
             session.stage = pol.Stage.OUT_OF_SCOPE
             yield TurnEvent(
@@ -377,10 +410,17 @@ class ConversationManager:
 
         # 2. State tracking and stage advancement.
         notes = self._update_state(session, message)
+        if guard_note:
+            # A steered turn is out of scope whatever the lane cues said.
+            session.stage = pol.Stage.OUT_OF_SCOPE
+            notes = [guard_note]
         messages, report = self.build_messages(session, message, notes)
 
         yield TurnEvent(
-            "start", stage=session.stage.value, intent=session.intent.value
+            "start",
+            stage=session.stage.value,
+            intent=session.intent.value,
+            guarded=f"steer:{guard_reason}" if guard_note else "",
         )
 
         # 3. Stream the answer.
@@ -439,6 +479,7 @@ class ConversationManager:
                 assistant=answer,
                 stage=session.stage,
                 intent=session.intent,
+                guarded=f"steer:{guard_reason}" if guard_note else "",
                 latency_ms=elapsed,
             )
         )
@@ -455,6 +496,7 @@ class ConversationManager:
             "done",
             stage=session.stage.value,
             intent=session.intent.value,
+            guarded=f"steer:{guard_reason}" if guard_note else "",
             corrected=corrected,
             stats=stats,
             context=report,

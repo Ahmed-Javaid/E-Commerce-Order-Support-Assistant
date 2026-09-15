@@ -37,7 +37,6 @@ from app import __version__
 from app.config import settings
 from app.conversation.manager import ConversationManager, ValidationError
 from app.conversation.session import SessionStore
-from app.domain.policy import Stage
 from app.domain.prompts import build_system_prompt
 from app.api import schemas
 from app.llm import build_engine
@@ -93,7 +92,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 async def _safe_warmup(warmup: Any) -> None:
     """Prime the runtime with the exact prefix every real turn will share."""
     probe = [
-        ChatMessage("system", build_system_prompt(Stage.GREETING)),
+        ChatMessage("system", build_system_prompt()),
         ChatMessage("user", "hello"),
     ]
     try:

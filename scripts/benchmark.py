@@ -38,7 +38,6 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from app.config import settings  # noqa: E402
 from app.conversation.tokens import CHARS_PER_TOKEN, estimate_tokens  # noqa: E402
-from app.domain.policy import Stage  # noqa: E402
 from app.domain.prompts import build_system_prompt  # noqa: E402
 from app.llm.base import ChatMessage  # noqa: E402
 from app.llm.ollama_engine import OllamaEngine  # noqa: E402
@@ -111,7 +110,7 @@ async def one_shot(engine: OllamaEngine, messages: list[ChatMessage]) -> Sample:
 
 async def bench_latency(engine: OllamaEngine, rounds: int) -> None:
     print("\n## Single-turn latency\n")
-    system = build_system_prompt(Stage.POLICY_RESOLUTION)
+    system = build_system_prompt()
 
     # A genuine uncached first token. The marker changes the shared prefix, so
     # the runtime cannot reuse any cached KV and has to evaluate the whole
@@ -194,7 +193,7 @@ async def bench_context(engine: OllamaEngine) -> None:
     prompt, which changes the shared prefix and invalidates the cached KV.
     """
     print("\n## Prompt length vs time-to-first-token\n")
-    system = build_system_prompt(Stage.POLICY_RESOLUTION)
+    system = build_system_prompt()
     filler_turn = (
         "I ordered a pair of the wireless earbuds last month and the left one "
         "keeps disconnecting when I walk away from my phone. "
@@ -411,7 +410,7 @@ async def bench_concurrent(url: str, users: int) -> None:
 async def bench_calibrate(engine: OllamaEngine) -> None:
     """Check the chars-per-token constant the memory budget is built on."""
     print("\n## Token estimator calibration\n")
-    system = build_system_prompt(Stage.POLICY_RESOLUTION)
+    system = build_system_prompt()
 
     rows: list[list[str]] = []
     errors: list[float] = []

@@ -108,20 +108,57 @@ Now do exactly what CURRENT STAGE tells you to do, as {kb.ASSISTANT_NAME}, in pl
 prose, with no heading."""
 
 
-def build_system_prompt(
+def build_system_prompt() -> str:
+    """The system prompt. Byte-identical for every turn of every session.
+
+    Nothing turn-specific goes in here, and that is the whole point.
+
+    llama.cpp reuses cached KV for the longest common *prefix* of consecutive
+    prompts. An earlier version of this function appended the stage directive,
+    pinned facts and per-turn notes to the system prompt, which meant the prompt
+    diverged at roughly token 1,650 -- and because the dialogue history sits
+    *after* the system message, every history turn fell on the far side of that
+    divergence and had to be re-evaluated from scratch on every single turn.
+
+    The measurement that exposed it: across an 8-turn conversation, TTFT tracked
+    *total* prompt tokens (1,786 -> 2,776) rather than *new* tokens, climbing
+    5 s -> 22 s. It was re-reading the entire conversation every time.
+
+    Now the prompt is laid out so the cacheable prefix keeps growing:
+
+        [ system: fixed ] [ turn 1 ] [ turn 2 ] ... [ new turn + context ]
+        \\_______________ cached, grows by appending _______________/  ^ only this
+
+    Turn-specific context moved into :func:`build_turn_context`, which is
+    prepended to the *final user message* instead. History entries are stored
+    and replayed as the customer's raw words, so once a turn is in history it
+    never changes again.
+    """
+    return "\n\n".join(
+        [
+            PERSONA,
+            "NIMBUS POLICY AND CATALOGUE REFERENCE\n" + kb.KNOWLEDGE_BLOCK,
+            HARD_RULES,
+            STYLE,
+            FINAL_GUARDRAIL,
+        ]
+    )
+
+
+def build_turn_context(
     stage: Stage,
     facts: dict[str, str] | None = None,
     summary: str = "",
     notes: list[str] | None = None,
     lane: str = "",
 ) -> str:
-    """Assemble the full system prompt for one turn."""
-    blocks: list[str] = [
-        PERSONA,
-        "NIMBUS POLICY AND CATALOGUE REFERENCE\n" + kb.KNOWLEDGE_BLOCK,
-        HARD_RULES,
-        STYLE,
-    ]
+    """Turn-specific guidance, prepended to the customer's newest message.
+
+    Returns "" when there is nothing to say, so a plain turn costs no extra
+    tokens at all. Being last in the prompt is also where a small model weights
+    hardest, so this placement helps adherence as well as latency.
+    """
+    blocks: list[str] = []
 
     summary_block = _summary_block(summary)
     if summary_block:
@@ -140,9 +177,19 @@ def build_system_prompt(
     if notes:
         blocks.append("NOTES FOR THIS TURN:\n" + "\n".join(f"- {n}" for n in notes))
 
-    blocks.append(FINAL_GUARDRAIL)
-
     return "\n\n".join(blocks)
+
+
+def compose_user_turn(context: str, message: str) -> str:
+    """Wrap the customer's message with this turn's context block."""
+    if not context:
+        return message
+    return (
+        "[internal guidance for this reply, not from the customer]\n"
+        + context
+        + "\n[end of guidance]\n\nCustomer says: "
+        + message
+    )
 
 
 SUMMARISER_SYSTEM = """\
